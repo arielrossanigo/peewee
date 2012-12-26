@@ -185,6 +185,7 @@ class DQ(Leaf):
 class Param(Leaf):
     def __init__(self, data):
         self.data = data
+        super(Param, self).__init__()
 
 
 class Func(Leaf):
@@ -497,6 +498,9 @@ class ForeignKeyField(IntegerField):
 
         if self.rel_model == 'self':
             self.rel_model = self.model_class
+        if self.related_name in self.rel_model._meta.fields:
+            raise AttributeError('Foreign key: %s.%s related name "%s" collision with field of same name' % (
+                self.model_class._meta.name, self.name, self.related_name))
 
         setattr(model_class, name, RelationDescriptor(self, self.rel_model))
         setattr(self.rel_model, self.related_name, ReverseRelationDescriptor(self))
@@ -952,7 +956,7 @@ class QueryResultWrapper(object):
                 if not fk_field:
                     continue
 
-                if not joined_inst.get_id() and fk_field.name in inst._data:
+                if joined_inst.get_id() is None and fk_field.name in inst._data:
                     rel_inst_id = inst._data[fk_field.name]
                     joined_inst.set_id(rel_inst_id)
 
@@ -1422,7 +1426,8 @@ class Database(object):
     sequences = False
     subquery_delete_same_table = True
 
-    def __init__(self, database, threadlocals=False, autocommit=True, **connect_kwargs):
+    def __init__(self, database, threadlocals=False, autocommit=True,
+                 fields=None, ops=None, **connect_kwargs):
         self.init(database, **connect_kwargs)
 
         if threadlocals:
@@ -1432,6 +1437,9 @@ class Database(object):
 
         self._conn_lock = threading.Lock()
         self.autocommit = autocommit
+
+        self.field_overrides = dict_update(self.field_overrides, fields or {})
+        self.op_overrides = dict_update(self.op_overrides, ops or {})
 
     def init(self, database, **connect_kwargs):
         self.deferred = database is None
@@ -1468,6 +1476,14 @@ class Database(object):
 
     def _connect(self, database, **kwargs):
         raise NotImplementedError
+
+    @classmethod
+    def register_fields(cls, fields):
+        cls.field_overrides = dict_update(cls.field_overrides, fields)
+
+    @classmethod
+    def register_ops(cls, ops):
+        cls.op_overrides = dict_update(cls.op_overrides, ops)
 
     def last_insert_id(self, cursor, model):
         if model._meta.auto_increment:
@@ -1981,7 +1997,7 @@ class Model(object):
     def save(self, force_insert=False):
         field_dict = dict(self._data)
         pk = self._meta.primary_key
-        if self.get_id() and not force_insert:
+        if self.get_id() is not None and not force_insert:
             field_dict.pop(pk.name)
             update = self.update(
                 **field_dict
@@ -2022,7 +2038,7 @@ class Model(object):
 
     def __eq__(self, other):
         return other.__class__ == self.__class__ and \
-               self.get_id() and \
+               self.get_id() is not None and \
                other.get_id() == self.get_id()
 
     def __ne__(self, other):

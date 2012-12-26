@@ -385,6 +385,13 @@ class SelectTestCase(BasePeeweeTestCase):
         sq = SelectQuery(User).where(fn.Lower(fn.Substr(User.username, 0, 1)) == 'a')
         self.assertWhere(sq, '(Lower(Substr(users."username", ?, ?)) = ?)', [0, 1, 'a'])
 
+    def test_where_r(self):
+        sq = SelectQuery(Blog).where(Blog.pub_date < R('NOW() - INTERVAL 1 HOUR'))
+        self.assertWhere(sq, '(blog."pub_date" < NOW() - INTERVAL 1 HOUR)', [])
+
+        sq = SelectQuery(Blog).where(Blog.pub_date < (fn.Now() - R('INTERVAL 1 HOUR')))
+        self.assertWhere(sq, '(blog."pub_date" < (Now() - INTERVAL 1 HOUR))', [])
+
     def test_where_subqueries(self):
         sq = SelectQuery(User).where(User.id << User.select().where(User.username=='u1'))
         self.assertWhere(sq, '(users."id" IN (SELECT users."id" FROM "users" AS users WHERE (users."username" = ?)))', ['u1'])
@@ -880,6 +887,16 @@ class ModelAPITestCase(ModelTestCase):
         self.assertEqual([b.title for b in u1.blog_set], ['b11', 'b12'])
         self.assertEqual([b.title for b in u2.blog_set], ['b2'])
 
+    def test_related_name_collision(self):
+        class Foo(TestModel):
+            f1 = CharField()
+
+        def make_klass():
+            class FooRel(TestModel):
+                foo = ForeignKeyField(Foo, related_name='f1')
+
+        self.assertRaises(AttributeError, make_klass)
+
     def test_fk_exceptions(self):
         c1 = Category.create(name='c1')
         c2 = Category.create(parent=c1, name='c2')
@@ -926,6 +943,18 @@ class ModelAPITestCase(ModelTestCase):
         u.save()
 
         self.assertEqual(User.select().count(), 1)
+
+    def test_zero_id(self):
+        query = 'insert into users (id, username) values (%s, %s)' % (
+            test_db.interpolation, test_db.interpolation)
+        test_db.execute_sql(query, (0, 'foo'))
+        Blog.insert(title='foo2', user=0).execute()
+
+        u = User.get(User.id == 0)
+        b = Blog.get(Blog.user == u)
+
+        self.assertTrue(u == u)
+        self.assertTrue(u == b.user)
 
     def test_saving_via_create_gh111(self):
         u = User.create(username='u')
